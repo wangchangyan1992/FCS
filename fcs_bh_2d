@@ -1,0 +1,193 @@
+using Distributed
+addprocs(60)
+
+@everywhere begin
+
+include(joinpath(dirname(@__DIR__), "tools.jl"))
+using ITensors
+using JLD2
+using ProgressMeter
+using Dates
+
+mutable struct Observer <: AbstractObserver
+    energy_tol::Float64
+    last_energy::Float64
+    min_sweep::Int64
+    info::AbstractVector
+
+    Observer(energy_tol=1e-8; min_sweep=5) = new(energy_tol, 1000., min_sweep, [])
+end
+
+function ITensors.checkdone!(o::Observer;kwargs...)
+    sweep  = kwargs[:sweep]
+    energy = kwargs[:energy]
+    if abs(energy-o.last_energy)/abs(energy) < o.energy_tol && sweep > o.min_sweep
+        println("Stopping DMRG after sweep $sweep")
+        o.info ∋ (sweep=sweep)
+        return true
+    end
+
+    o.last_energy = energy
+    return false
+end
+
+function gState(params)
+    (; t, nx, ny, filling, site_cutoff, bond_dim, cutoff, file_name) = params
+    @show t
+    nsites = nx * ny
+    sites = siteinds("Boson", nsites, conserve_qns=true, dim=site_cutoff)
+    lattice = square_lattice(nx, ny; yperiodic=true)
+
+    os = OpSum()
+
+    for b in lattice
+        os += -t, "adag", b.s1, "a", b.s2
+        os += -t, "adag", b.s2, "a", b.s1
+    end
+
+    for s in 1:nsites
+        os += 1/2, "n", s, "n", s
+    end
+
+    ham = MPO(os, sites)
+
+    psi0 = MPS(sites, [string(filling) for i = 1:nsites])
+
+    nsweeps = 200
+    # maxdim = [10,20,100,200,400, 1000]
+    maxdim = [10,20,100, bond_dim]
+    cutoff = [cutoff]
+    obs = Observer()
+
+    energy, psi = dmrg(ham, psi0; nsweeps, maxdim, cutoff, observer=obs)
+    maxdim = maximum(linkdims(psi))
+
+    # jldsave(file_name, psi=psi, maxdim=maxdim)
+    # return energy, psi, maximum(linkdims(psi))
+end
+
+function coorToSiteInd(coor, ny)
+    x, y = coor
+    return (x-1) * ny + y
+end
+
+function Region(reg_ori, lx, ly, ny)
+    region = []
+    for i in 0:lx-1, j in 0:ly-1
+        region ∋ coorToSiteInd(reg_ori + [i, j], ny)
+    end
+    return region
+end
+
+function Fcs(params)
+    (; psi, region, λ, filling) = params
+    sites = siteinds(psi)
+    gates = ITensor[]
+
+    for i in region
+        g_i = exp(im * λ * op("n", sites[i])) * exp(-im * λ * filling)
+        gates ∋ g_i
+    end
+
+    psi_new = apply(gates, psi)
+
+    return -log(inner(psi, psi_new))
+end
+
+filename(name) = joinpath(@__DIR__, name)
+
+
+
+
+end
+
+
+
+
+
+nx          = 25
+ny          = 6
+filling     = 1
+site_cutoff = 30
+bond_dim    = 5000
+cutoff      = 1e-8
+ts          = append!([0.01:0.01:0.05...], [0.1:0.1:0.8...])
+λs          = range(0, π, 201)
+
+
+@show nx ny
+
+# params = [(t=t, nx=nx, ny=ny, filling=filling, site_cutoff=site_cutoff, bond_dim=bond_dim, cutoff=cutoff, file_name=filename("data/psi_2d_t$(t)_nx$(nx)_ny$(ny).jld2")) for t in ts]
+
+# pmap(gState, params)
+
+reg_ori = [8, 2]
+lx      = 8
+ly      = 3
+reg     = Region(reg_ori, lx, ly, ny)
+fcs_s = []
+
+@showprogress for t in ts 
+    psi = load(filename("data/psi_2d_t$(t)_nx$(nx)_ny$(ny).jld2"))["psi"]
+    params = [(psi=psi, region=reg, λ=λ, filling=filling) for λ in λs]
+    fcs_s ∋ pmap(Fcs, params)
+end
+
+jldsave(filename("data/fcs_$(nx)_$(ny)_4cor_$(today()).jld2"), fcs_s=fcs_s, ts=ts, λs=λs, lxy=(nx, ny))
+
+@show fcs_s
+
+
+
+
+reg_ori  = [10, 2]
+lx       = 8
+ly       = 3
+reg_4cor = Region(reg_ori, lx, ly, ny)
+
+reg_ori = [10, 2]
+lx      = 7
+ly      = 4
+reg     = Region(reg_ori, lx, ly, ny)
+reg_triang = []
+for i = 1:ly
+    reg_triang ∋ reg[lx-2*(i-1):end, i]...
+end
+
+reg_ori = [1, 1]
+lx = nx
+ly = 2
+reg_0cor = Region(reg_ori, lx, ly, ny)
+
+
+reg_ori = [10, 2]
+lx      = 5
+ly      = 4
+reg     = Region(reg_ori, lx, ly, ny)
+reg[1, 1] = reg[end, 1] = reg[1, end] = reg[end, end] = 0
+reg_8cor = []
+for i in reg
+    if i != 0
+        reg_8cor ∋ i
+    end
+end
+
+reg_s = [reg_4cor, reg_triang, reg_0cor, reg_8cor]
+fcs_s = []
+@showprogress for t in ts 
+    psi = load(filename("data_geo/psi_2d_t$(t)_nx$(nx)_ny$(ny).jld2"))["psi"]
+    params = [(psi=psi, region=reg, λ=λ, filling=filling) for reg in reg_s, λ in λs]
+    fcs_s ∋ pmap(Fcs, params)
+end
+
+jldsave(filename("data_geo/fcs_$(nx)_$(ny)_geo_$(today()).jld2"), fcs_s=fcs_s, ts=ts, λs=λs, lxy=(nx, ny), reg_s=reg_s)
+
+
+maxdims = []
+for t in ts
+    psi = load(filename("data_geo/psi_2d_t$(t)_nx$(nx)_ny$(ny).jld2"))["psi"]
+    maxdims ∋ maxlinkdim(psi)
+end
+
+@show maxdims
+

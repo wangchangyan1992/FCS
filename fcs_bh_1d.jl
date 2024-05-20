@@ -3,7 +3,7 @@ addprocs(60)
 
 @everywhere begin
 
-include(joinpath(dirname(@__DIR__), "tools.jl"))
+include(joinpath(@__DIR__, "tools.jl"))
 using ITensors
 using JLD2
 using ProgressMeter

@@ -1,0 +1,22 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Full Counting Statistics of Bose-Hubbard Model
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Chang-Yan
+    family-names: Wang
+    email: wangchangyan1992@gmail.com
+    affiliation: Tsinghua University
+repository-code: 'https://github.com/wangchangyan1992/FCS/tree/main'
+abstract: >-
+  This repo includes the code to calculate the full counting
+  statistics (FCS) of Bose-Hubbard model in 1d and 2d as
+  well as the XXZ model in 1d.
+license: Apache-2.0
+commit: 1.0.0
+date-released: '2024-05-20'
